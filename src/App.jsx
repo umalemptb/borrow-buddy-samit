@@ -1,25 +1,20 @@
-import { useLayoutEffect, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import './App.css'
-import LoanForm from './components/LoanForm.jsx'
-import LoanList from './components/LoanList.jsx'
-import SearchBox from './components/SearchBox.jsx'
+import AccountBar from './components/AccountBar.jsx'
+import LoanPage from './components/LoanPage.jsx'
+import LoginForm from './components/LoginForm.jsx'
 import ThemeToggle from './components/ThemeToggle.jsx'
+import { SESSION_EXPIRED } from './lib/authErrors.js'
 import { toIsoDate } from './lib/dateFormat.js'
-import { filterLoansByFriend, markReturned, unmarkReturned } from './lib/loanRules.js'
-import { loadLoans, saveLoans } from './lib/storage.js'
+import { CONFIG_ERROR, supabase } from './lib/supabaseClient.js'
 import { getInitialTheme, saveTheme, toggleTheme } from './lib/theme.js'
 
-const createId = () =>
-  globalThis.crypto?.randomUUID?.() ??
-  `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`
-
 function App() {
-  // โหลดครั้งเดียวตอนเปิดหน้า (อ่านอย่างเดียว ไม่เขียนทับข้อมูลเดิม)
-  const [initial] = useState(loadLoans)
-  const [loans, setLoans] = useState(initial.loans)
-  const [warning, setWarning] = useState(initial.warning)
-  const [editingId, setEditingId] = useState(null)
-  const [query, setQuery] = useState('')
+  // undefined = กำลังตรวจเซสชันเดิม, null = ยังไม่เข้าสู่ระบบ
+  const [session, setSession] = useState(undefined)
+  const [notice, setNotice] = useState(null)
+  const [signingOut, setSigningOut] = useState(false)
+  const signOutRequested = useRef(false)
   const [theme, setTheme] = useState(() =>
     getInitialTheme(undefined, window.matchMedia('(prefers-color-scheme: dark)').matches),
   )
@@ -29,40 +24,66 @@ function App() {
     document.documentElement.dataset.theme = theme
   }, [theme])
 
+  // ติดตามเซสชัน: INITIAL_SESSION ตอนเปิดหน้า, SIGNED_IN/OUT, TOKEN_REFRESHED
+  // ห้ามเรียก supabase แบบ await ใน callback นี้ (ตามคำแนะนำของ supabase-js)
+  useEffect(() => {
+    if (!supabase) return
+    const { data } = supabase.auth.onAuthStateChange((event, nextSession) => {
+      if (event === 'SIGNED_OUT' && !signOutRequested.current) setNotice(SESSION_EXPIRED)
+      if (event === 'SIGNED_IN') setNotice(null)
+      signOutRequested.current = false
+      setSession(nextSession)
+    })
+    return () => data.subscription.unsubscribe()
+  }, [])
+
   const handleToggleTheme = () => {
     const next = toggleTheme(theme)
     setTheme(next)
     saveTheme(next)
   }
 
+  const handleSignOut = async () => {
+    setSigningOut(true)
+    signOutRequested.current = true
+    const { error } = await supabase.auth.signOut()
+    // ติดต่อเซิร์ฟเวอร์ไม่ได้ ก็ยังล้างเซสชันในเครื่องนี้
+    if (error) await supabase.auth.signOut({ scope: 'local' })
+    setNotice(null)
+    setSigningOut(false)
+  }
+
+  // คำขอข้อมูลตอบว่าเซสชันหมดอายุ: ล้างเซสชันในเครื่องแล้วกลับหน้าเข้าสู่ระบบ
+  const handleSessionExpired = useCallback(() => {
+    supabase.auth.signOut({ scope: 'local' })
+  }, [])
+
   const today = toIsoDate(new Date())
-  const editingLoan = loans.find((loan) => loan.id === editingId) ?? null
-  const visibleLoans = filterLoansByFriend(loans, query)
 
-  // ทุกการเปลี่ยน Loan ต้องผ่านฟังก์ชันนี้ เพื่อบันทึกทุกครั้งที่เปลี่ยน
-  // ไม่ใช้ useEffect เพราะจะเขียนรายการว่างทับข้อมูลเดิมที่อ่านไม่ได้ตอนเปิดหน้า
-  const changeLoans = (nextLoans) => {
-    setLoans(nextLoans)
-    setWarning(saveLoans(nextLoans))
+  let content
+  if (CONFIG_ERROR) {
+    content = <p role="alert">{CONFIG_ERROR}</p>
+  } else if (session === undefined) {
+    content = <p role="status">กำลังตรวจสอบการเข้าสู่ระบบ...</p>
+  } else if (session === null) {
+    content = <LoginForm client={supabase} notice={notice} />
+  } else {
+    content = (
+      <>
+        <AccountBar
+          email={session.user.email}
+          onSignOut={handleSignOut}
+          signingOut={signingOut}
+        />
+        <LoanPage
+          key={session.user.id}
+          client={supabase}
+          today={today}
+          onSessionExpired={handleSessionExpired}
+        />
+      </>
+    )
   }
-
-  // Loan ที่ยังไม่มี id คือเพิ่มใหม่ ถ้ามี id คือแก้ไขรายการเดิม
-  const handleSave = (loan) => {
-    if (loan.id) {
-      changeLoans(loans.map((l) => (l.id === loan.id ? loan : l)))
-    } else {
-      changeLoans([...loans, { ...loan, id: createId() }])
-    }
-    setEditingId(null)
-  }
-
-  const replaceLoan = (target, update) =>
-    changeLoans(loans.map((l) => (l.id === target.id ? update(l) : l)))
-
-  const handleMarkReturned = (loan, returnedDate) =>
-    replaceLoan(loan, (l) => markReturned(l, today, returnedDate))
-
-  const handleUnmarkReturned = (loan) => replaceLoan(loan, unmarkReturned)
 
   return (
     <main>
@@ -70,22 +91,7 @@ function App() {
         <h1>Borrow Buddy</h1>
         <ThemeToggle theme={theme} onToggle={handleToggleTheme} />
       </header>
-      {warning && <p role="alert">{warning}</p>}
-      <LoanForm
-        key={editingLoan?.id ?? 'new'}
-        today={today}
-        editingLoan={editingLoan}
-        onSave={handleSave}
-        onCancelEdit={() => setEditingId(null)}
-      />
-      <SearchBox value={query} onChange={setQuery} />
-      <LoanList
-        loans={visibleLoans}
-        today={today}
-        onMarkReturned={handleMarkReturned}
-        onUnmarkReturned={handleUnmarkReturned}
-        onEdit={(loan) => setEditingId(loan.id)}
-      />
+      {content}
     </main>
   )
 }

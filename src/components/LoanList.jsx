@@ -4,7 +4,7 @@ import LoanItem from './LoanItem.jsx'
 // ลำดับกลุ่ม: เกินกำหนด → ยังไม่คืน → คืนแล้ว (แต่ละกลุ่มเรียงจาก groupLoans แล้ว)
 const GROUP_ORDER = [STATUS.OVERDUE, STATUS.OUTSTANDING, STATUS.RETURNED]
 
-export default function LoanList({ loans, today, onMarkReturned, onUnmarkReturned, onEdit }) {
+export default function LoanList({ loans, today, saving, onMarkReturned, onUnmarkReturned, onEdit }) {
   if (loans.length === 0) return <p>ไม่มีรายการ</p>
 
   const groups = groupLoans(loans, today)
@@ -22,6 +22,7 @@ export default function LoanList({ loans, today, onMarkReturned, onUnmarkReturne
                 key={loan.id}
                 loan={loan}
                 today={today}
+                saving={saving}
                 onMarkReturned={onMarkReturned}
                 onUnmarkReturned={onUnmarkReturned}
                 onEdit={onEdit}

@@ -3,14 +3,15 @@ import { validateLoan } from '../lib/loanRules.js'
 
 // ฟอร์มเดียวใช้ทั้งเพิ่มและแก้ไข
 // editingLoan = null คือเพิ่มใหม่ ผู้เรียกควรใส่ key ให้ฟอร์มรีเซ็ตเมื่อเปลี่ยนรายการที่แก้
-export default function LoanForm({ today, editingLoan, onSave, onCancelEdit }) {
+// onSave คืน Promise<boolean> ถ้าบันทึกไม่สำเร็จ ฟอร์มคงค่าเดิมไว้
+export default function LoanForm({ today, editingLoan, saving, onSave, onCancelEdit }) {
   const [friendName, setFriendName] = useState(editingLoan?.friendName ?? '')
   const [itemName, setItemName] = useState(editingLoan?.itemName ?? '')
   const [borrowedDate, setBorrowedDate] = useState(editingLoan?.borrowedDate ?? today)
   const [dueDate, setDueDate] = useState(editingLoan?.dueDate ?? '')
   const [errors, setErrors] = useState([])
 
-  const handleSubmit = (e) => {
+  const handleSubmit = async (e) => {
     e.preventDefault()
     const draft = {
       ...(editingLoan ?? { returnedDate: null }),
@@ -23,8 +24,8 @@ export default function LoanForm({ today, editingLoan, onSave, onCancelEdit }) {
     setErrors(found)
     if (found.length > 0) return
 
-    onSave(draft)
-    if (!editingLoan) {
+    const ok = await onSave(draft)
+    if (ok && !editingLoan) {
       setFriendName('')
       setItemName('')
       setBorrowedDate(today)
@@ -81,7 +82,9 @@ export default function LoanForm({ today, editingLoan, onSave, onCancelEdit }) {
       )}
 
       <div className="form-actions">
-        <button type="submit">{editingLoan ? 'บันทึกการแก้ไข' : 'เพิ่ม'}</button>
+        <button type="submit" disabled={saving}>
+          {saving ? 'กำลังบันทึก...' : editingLoan ? 'บันทึกการแก้ไข' : 'เพิ่ม'}
+        </button>
         {editingLoan && (
           <button type="button" onClick={onCancelEdit}>
             ยกเลิกการแก้ไข
